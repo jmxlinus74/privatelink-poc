@@ -1,0 +1,129 @@
+# AWS - https://docs.aws.amazon.com/vpc/latest/privatelink/concepts.html
+# See https://docs.getmontecarlo.com/docs/privatelink-using-cloudformation
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Sample service provider template to enable sharing access to your resource via AWS PrivateLink (AKA an endpoint service).
+  This is done by creating Network Load Balancer in your VPC as the service front end and then configuring a VPC endpoint service.
+Metadata:
+  License: Apache-2.0
+  AWS::CloudFormation::Interface:
+      ParameterGroups:
+        - Label:
+            default: Network load balancer configuration
+          Parameters:
+            - LbVPCId
+            - LbSubnetId
+            - LbSubnetCIDR
+        - Label:
+            default: Resource information
+          Parameters:
+            - ResourceIPAddress
+            - ResourcePort
+            - ResourceSecurityGroupId
+        - Label:
+            default: ZApp information
+          Parameters:
+            - ZAppAccountId
+      ParameterLabels:
+        LbVPCId:
+          default: VPC ID
+        LbSubnetId:
+          default: Subnet ID
+        LbSubnetCIDR:
+          default: CIDR Range
+        ResourceIPAddress:
+          default: IP address
+        ResourcePort:
+          default: Port
+        ResourceSecurityGroupId:
+          default: Security Group ID
+        ZAppAccountId:
+          default: Account ID
+Parameters:
+  LbVPCId:
+    Description: VPC ID to create the NLB in. Typically, this is the same VPC as the resource you want to connect.
+    Type: AWS::EC2::VPC::Id
+  LbSubnetId:
+    Description: Subnet to create the NLB in. Typically, this is the same subnet as the resource you want to connect.
+    Type: AWS::EC2::Subnet::Id
+  LbSubnetCIDR:
+    Description: >
+      CIDR range of the subnet to whitelist inbound access. After initial deployment it is recommended to
+      restrict to the private IP of the NLB instead of using the entire subnet.
+    Type: String
+  ResourceIPAddress:
+    Description: The IP Address of your resource (e.g. elastic IP, Redshift leader node, etc.)
+    Type: String
+  ResourcePort:
+    Description: The port on the resource your service is using. The NLB listener will also use this port.
+    Type: String
+  ResourceSecurityGroupId:
+    Description: The Security Group ID for your resource to whitelist inbound access.
+    Type: AWS::EC2::SecurityGroup::Id
+  ZAppAccountId:
+    Description: AWS Account ID where ZApp is hosted. For granting access to the endpoint service.
+    Type: String
+Resources:
+  ServiceLb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      LoadBalancerAttributes:
+        - Key: load_balancing.cross_zone.enabled
+          Value: true
+      Scheme: internal
+      SubnetMappings:
+        - SubnetId: !Ref LbSubnetId
+      Type: network
+  ServiceTg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPort: !Ref ResourcePort
+      IpAddressType: ipv4
+      Port: !Ref ResourcePort
+      Protocol: TCP
+      Targets:
+        - Id: !Ref ResourceIPAddress
+          Port: !Ref ResourcePort
+      TargetType: ip
+      VpcId: !Ref LbVPCId
+  ServiceListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ServiceTg
+      LoadBalancerArn: !Ref ServiceLb
+      Port: !Ref ResourcePort
+      Protocol: TCP
+  ServiceEndpoint:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      AcceptanceRequired: false
+      NetworkLoadBalancerArns:
+        - !Ref ServiceLb
+  ServiceAccess:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      AllowedPrincipals:
+        - !Sub arn:aws:iam::${ZAppAccountId}:root
+      ServiceId: !Ref ServiceEndpoint
+  ResourceSgIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ResourceSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref ResourcePort
+      ToPort: !Ref ResourcePort
+      CidrIp: !Ref LbSubnetCIDR
+      Description: Allow inbound from NLB
+Outputs:
+  ServiceLbName:
+    Description: The full name of the network load balancer
+    Value: !GetAtt ServiceLb.LoadBalancerFullName
+  ServiceEndpointName:
+    Description: Endpoint service name
+    Value: !Sub com.amazonaws.vpce.${AWS::Region}.${ServiceEndpoint}

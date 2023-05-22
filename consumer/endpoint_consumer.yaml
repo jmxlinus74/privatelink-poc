@@ -1,0 +1,81 @@
+# AWS - https://docs.aws.amazon.com/vpc/latest/privatelink/concepts.html
+# See https://docs.getmontecarlo.com/docs/privatelink-using-cloudformation
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Sample endpoint consumer template to enable sharing access to your resource via AWS PrivateLink (AKA an endpoint service).
+  This is done by creating a VPC endpoint to connect to the service created in the producer template.
+Metadata:
+  License: Apache-2.0
+  AWS::CloudFormation::Interface:
+      ParameterGroups:
+        - Label:
+            default: WCP information
+          Parameters:
+            - WCPVpcId
+            - WCPSubnetId
+            - WCPSecurityGroupId
+        - Label:
+            default: Service information
+          Parameters:
+            - EndpointServiceName
+            - EndpointServicePort
+      ParameterLabels:
+        WCPVpcId:
+          default: VPC ID
+        WCPSubnetId:
+          default: Subnet ID
+        WCPSecurityGroupId:
+          default: Security Group ID
+        EndpointServiceName:
+          default: Endpoint service name
+        EndpointServicePort:
+          default: Endpoint service port
+Parameters:
+  WCPVpcId:
+    Description: The WCP VPC ID. Can be found in the WCP stack outputs (VpcId).
+    Type: AWS::EC2::VPC::Id
+  WCPSubnetId:
+    Description: >
+      One of the WCP private Subnet IDs. Can be found in the WCP 
+      stack outputs (PrivateSubnetAz1 or PrivateSubnetAz2).
+    Type: AWS::EC2::Subnet::Id
+  WCPSecurityGroupId:
+    Description: >
+      The WCP default Security Group ID. Can be found in the WCP stack outputs (SecurityGroup).
+    Type: AWS::EC2::SecurityGroup::Id
+  EndpointServiceName:
+    Description: >
+      Name of the endpoint service. Can be found in the provider template's stack outputs (ServiceEndpointName).
+    Type: String
+  EndpointServicePort:
+    Description: >
+      The port on the resource your service is using to whitelist. This should be the same port you provided 
+      when creating the provider template (ResourcePort).
+    Type: String
+Resources:
+  Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      SecurityGroupIds:
+        - !Ref WCPSecurityGroupId
+      ServiceName: !Ref EndpointServiceName
+      SubnetIds:
+        - !Ref WCPSubnetId
+      VpcEndpointType: Interface
+      VpcId: !Ref WCPVpcId
+  WCPSgIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WCPSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref EndpointServicePort
+      ToPort: !Ref EndpointServicePort
+      SourceSecurityGroupId: !Ref WCPSecurityGroupId
+      Description: Allow access to the endpoint
+Outputs:
+  ServiceEndpointDNS:
+    Description: Endpoint DNS name
+    Value: !Select
+    - 0
+    - !GetAtt Endpoint.DnsEntries
